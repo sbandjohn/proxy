@@ -29,6 +29,7 @@ void to_lowercase(char *s);
 
 int generate_requesthdrs(rio_t *rp, struct reqline_t *reqp, char *res);
 int pass_back(int fd, int myfd);
+void sigpipe_hanlder(int sig);
 
 int main(int argc, char *argv[])
 {
@@ -39,6 +40,7 @@ int main(int argc, char *argv[])
 	pthread_t tid;
 
 	assert(argc == 2);
+	Signal(SIGPIPE, SIG_IGN);
 	listenfd = Open_listenfd(argv[1]);
 
 	while (1){
@@ -53,6 +55,7 @@ int main(int argc, char *argv[])
 void *thread(void *argp){
 	int connfd = (int)(long)argp;
 	Pthread_detach(Pthread_self());
+	printf("Connected\n");
 	serve(connfd);
 	Close(connfd);
 	printf("close connection\n");
@@ -67,8 +70,10 @@ void serve(int fd){
 
 	/* Read request line and headers */
 	rio_readinitb(&rio, fd);
-	if (!Rio_readlineb(&rio, buf, MAXLINE))  //line:netp:doit:readrequest
+	ssize_t rc = rio_readlineb(&rio, buf, MAXLINE);
+	if (rc <= 0)  //line:netp:doit:readrequest
 		return;
+
 	printf("server %u got request line: %s\n", tid, buf);
 
 	if (sscanf(buf, "%s %s %s\r\n", method, uri, version) != 3){
@@ -119,7 +124,6 @@ void serve(int fd){
 	/* generate the headers for forwarding from the request */
 	char myhdrs[MAXLINE];
 	err = generate_requesthdrs(&rio, &req, myhdrs);
-	printf("generated request headers:\n%sEnd\n", myhdrs);
 	if (err == -1){
 		clienterror(fd, "oops", "23333", "Unable to generate headers",
 				"Proxy cannot generate headers from the request");
@@ -127,6 +131,7 @@ void serve(int fd){
 	}
 
 	/* try to connect to server */
+	printf("Try to connect %s:%s\n", req.hostname, req.port);
 	int myfd = open_clientfd(req.hostname, req.port);
 	if (fd < 0){
 		clienterror(fd, uri, "23333", "Unable to connect host",
@@ -137,7 +142,7 @@ void serve(int fd){
 	char request[MAXLINE];
 	sprintf(request, "GET %s HTTP/1.0\r\n", req.filename);
 	strcat(request, myhdrs);
-	printf("full request:\n%sEnd\n", request);
+	printf("sending full request:\n%sEnd\n", request);
 
 	err = rio_writen(myfd, request, strlen(request));
 	if (err == -1){
@@ -145,7 +150,7 @@ void serve(int fd){
 				"Proxy cannot write to server");
 		return ;
 	}
-	printf("written, waiting for response\n");
+	printf("sent, waiting for response\n");
 
 	pass_back(fd, myfd);
 
@@ -208,7 +213,7 @@ int generate_requesthdrs(rio_t *rp, struct reqline_t *reqp, char *res){
 	int hashost = 0;
 
 	*res = 0;
-	Rio_readlineb(rp, buf, MAXLINE);
+	if (rio_readlineb(rp, buf, MAXLINE)<=0) return -1;
 	printf("header:%s", buf);
 	while (strcmp(buf, "\r\n")){
 		int err = parse_header(buf, key, value);
@@ -235,7 +240,7 @@ int generate_requesthdrs(rio_t *rp, struct reqline_t *reqp, char *res){
 		}
 		printf("send:%s", send);
 		strcat(res, send);
-		Rio_readlineb(rp, buf, MAXLINE);
+		if (rio_readlineb(rp, buf, MAXLINE)<=0) return -1;
 		printf("header:%s", buf);
 	}
 	if (!hashost){
@@ -270,18 +275,6 @@ int pass_back(int fd, int myfd){
 	return 0;
 }
 
-void echo(int connfd){
-	size_t n;
-	char buf[MAXLINE];
-	rio_t rio;
-
-	rio_readinitb(&rio, connfd);
-	while ((n = Rio_readlineb(&rio, buf, MAXLINE)) != 0){
-		printf("server received %d bytes\n", (int)n);
-		Rio_writen(connfd, buf, n);
-	}
-}
-
 /* $begin clienterror */
 void clienterror(int fd, char *cause, char *errnum, 
 		char *shortmsg, char *longmsg) 
@@ -297,12 +290,12 @@ void clienterror(int fd, char *cause, char *errnum,
 
 	/* Print the HTTP response */
 	sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
-	Rio_writen(fd, buf, strlen(buf));
+	if (rio_writen(fd, buf, strlen(buf)) == -1) return ;
 	sprintf(buf, "Content-type: text/html\r\n");
-	Rio_writen(fd, buf, strlen(buf));
+	if (rio_writen(fd, buf, strlen(buf)) == -1) return ;
 	sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
-	Rio_writen(fd, buf, strlen(buf));
-	Rio_writen(fd, body, strlen(body));
+	if (rio_writen(fd, buf, strlen(buf)) == -1) return ;
+	if (rio_writen(fd, body, strlen(body)) == -1) return ;
 }
 /* $end clienterror */
 
