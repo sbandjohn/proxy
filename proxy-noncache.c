@@ -5,6 +5,8 @@
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 
+//void Perror(char *msg);
+
 void serve(int connfd);
 void *thread(void *argp);
 void echo(int connfd);
@@ -23,10 +25,8 @@ int parse_uri(char *uri, struct reqline_t *reqlinep);
 void to_lowercase(char *s);
 
 int generate_requesthdrs(rio_t *rp, struct reqline_t *reqp, char *res);
-int fetch_and_pass(int fd, int myfd, Obj *obj, int *needcache);
+int pass_back(int fd, int myfd);
 void sigpipe_hanlder(int sig);
-
-Cache *cch;
 
 int main(int argc, char *argv[])
 {
@@ -37,9 +37,7 @@ int main(int argc, char *argv[])
 	pthread_t tid;
 
 	assert(argc == 2);
-
 	Signal(SIGPIPE, SIG_IGN);
-	cch = new_cache();
 	listenfd = Open_listenfd(argv[1]);
 
 	while (1){
@@ -67,7 +65,6 @@ void serve(int fd){
 	char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
 	rio_t rio;
 
-	printf("server %u start\n", tid);
 	/* Read request line and headers */
 	rio_readinitb(&rio, fd);
 	ssize_t rc = rio_readlineb(&rio, buf, MAXLINE);
@@ -77,14 +74,13 @@ void serve(int fd){
 	printf("server %u got request line: %s\n", tid, buf);
 
 	if (sscanf(buf, "%s %s %s\r\n", method, uri, version) != 3){
-		clienterror(fd, buf, "23333333", "Invalid Request Line",
+		clienterror(fd, buf, "23333333", "Invalid request line",
 				"Invalid request line!");
 		return ;
 	}
 
 	printf("server %u got uri:(%s) version:(%s)\n", tid, uri, version);
 
-	// check method and version
 	if (strcasecmp(method, "GET")) {                     //line:netp:doit:beginrequesterr
 		clienterror(fd, method, "501", "Not Implemented",
 				"Proxy does not implement this method");
@@ -131,58 +127,35 @@ void serve(int fd){
 		return ;
 	}
 
-	/* generate the full request */
+	/* try to connect to server */
+	printf("Try to connect %s:%s\n", req.hostname, req.port);
+	int myfd = open_clientfd(req.hostname, req.port);
+	if (fd < 0){
+		clienterror(fd, uri, "23333", "Unable to connect host",
+				"Proxy cannot connect to host");
+		return ;
+	}
+
 	char request[MAXLINE];
 	sprintf(request, "GET %s HTTP/1.0\r\n", req.filename);
 	strcat(request, myhdrs);
-	printf("full request:\n%s", request);
+	printf("sending full request:\n%sEnd\n", request);
 
-	// find the requested page in cache
-	Obj *obj = new_obj();   // this obj should be deleted
-	int hit = find_in_cache(cch, request, obj);
-	
-	// hit case
-	if (hit){
-		printf("server %u cache hit\n", tid);
-		if (rio_writen(fd, obj->content, obj->size) == -1){
-			printf("error while writing to client\n");
-		}
+	err = rio_writen(myfd, request, strlen(request));
+	if (err == -1){
+		clienterror(fd, uri, "23333", "Write Error",
+				"Proxy cannot write to server");
+		return ;
 	}
-	// miss case
-	else{
-		printf("server %u cache miss\n", tid);
-		printf("try to connect %s:%s\n", req.hostname, req.port);
+	printf("sent, waiting for response\n");
 
-		int myfd = open_clientfd(req.hostname, req.port);
-		if (myfd < 0){
-			clienterror(fd, uri, "23333", "Unable to connect host",
-					"Proxy cannot connect to host");
-		}else{
-			printf("sending full request\n");
-			err = rio_writen(myfd, request, strlen(request));
-			if (err == -1){
-				clienterror(fd, uri, "23333", "Write Error",
-						"Proxy cannot write to server");
-			}else{
-				printf("sent, waiting for response\n");
-				int needcache = 0;
-				err = fetch_and_pass(fd, myfd, obj, &needcache);
-				if (err == 0){
-					if (needcache)
-						add_to_cache(cch, request, obj);
-				}
-			}
-			Close(myfd);
-		}
-	}
+	pass_back(fd, myfd);
 
-	del_obj(obj);
-	printf("server %u done\n", tid);
+	Close(myfd);
 }
 
 void to_lowercase(char *s){
-	int i;
-	for (i = 0; s[i]; ++i)
+	for (int i = 0; s[i]; ++i)
 		if (s[i]>='A' && s[i]<='Z') s[i] = 'a' + s[i]-'A';
 }
 
@@ -279,20 +252,14 @@ int generate_requesthdrs(rio_t *rp, struct reqline_t *reqp, char *res){
 	return 0;
 }
 
-int fetch_and_pass(int fd, int myfd, Obj *obj, int *needcache){
+int pass_back(int fd, int myfd){
 	rio_t rio;
 	rio_readinitb(&rio, myfd);
 	char buf[MAXLINE];
 	ssize_t nread;
 
-	init_obj(obj);
-	*needcache = 1;
-
 	while ((nread = rio_readnb(&rio, buf, MAXLINE)) > 0){
 		printf("proxy received %d bytes\n", (int)nread);
-		if (needcache)
-			if (cat_obj(obj, buf, nread) == -1)
-				needcache = 0;
 		if (rio_writen(fd, buf, nread) == -1){
 			printf("cannot write back to client\n");
 			return -1;
@@ -329,3 +296,9 @@ void clienterror(int fd, char *cause, char *errnum,
 }
 /* $end clienterror */
 
+/*
+void Perror(char *msg){
+	sio_puts(msg);
+	Pthread_exit(NULL);
+}
+*/
