@@ -8,7 +8,7 @@ int main(int argc, char *argv[]){
 		cat_obj(obj, argv[i], strlen(argv[i]));
 	print(obj);
 	printf("\n");
-	init_cache(cch); // make gcc happy 
+	init_cache(cch);
 	exit(0);
 }
  
