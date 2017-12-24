@@ -80,6 +80,7 @@ void init_cache(Cache *cch){
 	Sem_init(&cch->canwrite, 0, 1);
 	Sem_init(&cch->mutex, 0, 1);
 	Sem_init(&cch->timelock, 0, 1);
+
 	cch->readcnt = 0;
 	cch->curtime = 0;
 	int i;
@@ -89,8 +90,6 @@ void init_cache(Cache *cch){
 
 int add_to_cache(Cache *cch, char *req, Obj *obj){
 	if (obj->size > MAX_OBJECT_SIZE) return -1; 
-
-	//printf("thread %d add to cache %d:\n", (int)Pthread_self(), h);
 
 	// find the block to add to
 	int i = 0, got = -1, mint = INT_MAX;
@@ -105,31 +104,29 @@ int add_to_cache(Cache *cch, char *req, Obj *obj){
 	}
 	if (got == -1) return -1;
 
-	//printf("thread %d wait for write\n", (int)Pthread_self());
+	// wait until no reader is reading
 	P(&cch->canwrite);
 
-	//printf("thread %d start writing\n", (int)Pthread_self());
 	CB *cb = &cch->block[got];
 	cb->valid = 1;
 	strcpy(cb->req, req);
 	copy_obj(&cb->obj, obj);
 
+	// lock and unlock the access to time
 	P(&cch->timelock);
 	cb->time = ++cch->curtime;
 	V(&cch->timelock);
 
 	V(&cch->canwrite);
-	//printf("thread %d write done\n", (int)Pthread_self());
 	return 0;
 }
 
 int find_in_cache(Cache *cch, char *req, Obj *obj){
-	//printf("thread:%d  h:%d\n", (int)Pthread_self(), h);
 	int hit = 0;
 
-	//printf("thread %d wait for read\n", (int)Pthread_self());
+	// several readers can read concurrently,
+	// and the first reader causes the writer to wait
 	P(&cch->mutex);
-	//printf("threal %d start reading\n", (int)Pthread_self());
 	++cch->readcnt;
 	if (cch->readcnt == 1)
 		P(&cch->canwrite);
@@ -155,7 +152,6 @@ int find_in_cache(Cache *cch, char *req, Obj *obj){
 		V(&cch->canwrite);
 	V(&cch->mutex);
 
-	//printf("thread %d read done\n", (int)Pthread_self());
 	return hit;
 }
 

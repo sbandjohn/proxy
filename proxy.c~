@@ -112,11 +112,11 @@ void serve(int fd){
 	printf("server %u got uri:(%s) version:(%s)\n", tid, uri, version);
 
 	// check method and version
-	if (strcasecmp(method, "GET")) {                     //line:netp:doit:beginrequesterr
+	if (strcasecmp(method, "GET")) {
 		clienterror(fd, method, "501", "Not Implemented",
 				"Proxy does not implement this method");
 		return ;
-	}                                                    //line:netp:doit:endrequesterr
+	}
 	to_lowercase(version);
 	if (strcmp(version, "http/1.0") && strcmp(version, "http/1.1")){
 		clienterror(fd, version, "505", "Not supported",
@@ -132,7 +132,7 @@ void serve(int fd){
 	req.filename = filename;
 	req.port = port;
 
-	int err = parse_uri(uri, &req);       //line:netp:doit:staticcheck
+	int err = parse_uri(uri, &req);
 	printf("server %u parse: err: %d "
 			"scheme:%s hostname:%s port:%s filename:%s\n",
 			tid, err,
