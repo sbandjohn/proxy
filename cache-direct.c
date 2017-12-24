@@ -1,17 +1,5 @@
-/*
-* 林涛 1600012773
-* a cache for (web) object
-* every object consists of a size and a content which is a string of bytes
-* every cache block included:
-*	a valid bit, access time, a object identifier and a object
-* obj identifier is a string
-* cache is fully connected, so when reading and writing, scan each block 
-* use LRU as eviction policy 
-*/
-
 #include "cache.h"
 
-// number of blocks in a cache
 static int cbnum = MAX_CACHE_SIZE / sizeof(CB);
 
 Obj *new_obj(){
@@ -71,7 +59,6 @@ void print(Obj *obj){
 
 static void init_cb(CB *cb){
 	cb->valid = 0;
-	cb->time = 0;
 	strcpy(cb->req, "\0");
 	init_obj(&cb->obj);
 }
@@ -79,44 +66,34 @@ static void init_cb(CB *cb){
 void init_cache(Cache *cch){
 	Sem_init(&cch->canwrite, 0, 1);
 	Sem_init(&cch->mutex, 0, 1);
-	Sem_init(&cch->timelock, 0, 1);
 	cch->readcnt = 0;
-	cch->curtime = 0;
 	int i;
 	for (i = 0; i<cbnum; ++i)
 		init_cb(&cch->block[i]);
 }
 
+static int get_hash(char *buf){
+	int ans = 0;
+	int i;
+	for (i = 0; i < HASH_LEN && buf[i]; ++i)
+		ans = (ans*BASE + buf[i]) % cbnum;
+	if (ans < 0) ans += cbnum;
+	return ans;
+}
+
 int add_to_cache(Cache *cch, char *req, Obj *obj){
 	if (obj->size > MAX_OBJECT_SIZE) return -1; 
+	int h = get_hash(req);
+	CB *cb = &cch->block[h];
 
 	//printf("thread %d add to cache %d:\n", (int)Pthread_self(), h);
-
-	// find the block to add to
-	int i = 0, got = -1, mint = INT_MAX;
-	for (i = 0; i < cbnum; ++i){
-		if (!cch->block[i].valid){
-			got = i;
-			break;
-		}else if (cch->block[i].time < mint){ // not exact time
-			mint = cch->block[i].time;
-			got = i;
-		}
-	}
-	if (got == -1) return -1;
-
 	//printf("thread %d wait for write\n", (int)Pthread_self());
 	P(&cch->canwrite);
 
-	//printf("thread %d start writing\n", (int)Pthread_self());
-	CB *cb = &cch->block[got];
+	//printf("thread %d start write\n", (int)Pthread_self());
 	cb->valid = 1;
 	strcpy(cb->req, req);
 	copy_obj(&cb->obj, obj);
-
-	P(&cch->timelock);
-	cb->time = ++cch->curtime;
-	V(&cch->timelock);
 
 	V(&cch->canwrite);
 	//printf("thread %d write done\n", (int)Pthread_self());
@@ -124,7 +101,9 @@ int add_to_cache(Cache *cch, char *req, Obj *obj){
 }
 
 int find_in_cache(Cache *cch, char *req, Obj *obj){
-	//printf("thread:%d  h:%d\n", (int)Pthread_self(), h);
+	int h = get_hash(req);
+	printf("thread:%d  h:%d\n", (int)Pthread_self(), h);
+	CB *cb = &cch->block[h];
 	int hit = 0;
 
 	//printf("thread %d wait for read\n", (int)Pthread_self());
@@ -136,18 +115,10 @@ int find_in_cache(Cache *cch, char *req, Obj *obj){
 	V(&cch->mutex);
 
 	// hit or miss
-	int i = 0;
-	for (i = 0; i < cbnum; ++i){
-		if (cch->block[i].valid && strcmp(cch->block[i].req, req) == 0){
-			// hit
-			copy_obj(obj, &cch->block[i].obj);
-			P(&cch->timelock);
-			cch->block[i].time = ++ cch->curtime;
-			V(&cch->timelock);
-			hit = 1;
-			break;
-		}
-	}	
+	if (strcmp(cb->req, req) == 0){
+		copy_obj(obj, &cb->obj);
+		hit = 1;
+	}
 
 	P(&cch->mutex);
 	--cch->readcnt;
